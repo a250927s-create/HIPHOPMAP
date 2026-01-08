@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>HIPHOP HISTORY MAP</title>
+
+  <link
+    href="https://unpkg.com/maplibre-gl@3.6.0/dist/maplibre-gl.css"
+    rel="stylesheet"
+  />
+
+  <style>
+    body {
+      margin: 0;
+      background: #000;
+      font-family: 'Impact', sans-serif;
+      overflow: hidden;
+    }
+
+    #map {
+      width: 100vw;
+      height: 100vh;
+    }
+
+    /* ターンテーブル */
+    #turntable {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      width: 180px;
+      height: 180px;
+      border-radius: 50%;
+      background: radial-gradient(#222 40%, #000 70%);
+      border: 4px solid #ffcc00;
+      cursor: grab;
+    }
+
+    #record {
+      width: 100%;
+      height: 100%;
+      border-radius: 50%;
+      background: 
+        radial-gradient(circle at 30% 30%, rgba(255,255,255,0.02), transparent 10%),
+        repeating-radial-gradient(circle, #111, #111 4px, #000 8px);
+      position: relative;
+      transition: transform 0.08s linear;
+    }
+    /* レコード中央の赤いラベルと文字 */
+    #record::before {
+      content: '';
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      background: radial-gradient(circle at 30% 30%, #ff6666, #cc0000 70%);
+      box-shadow: 0 0 16px rgba(204,0,0,0.6) inset, 0 4px 12px rgba(0,0,0,0.6);
+      border: 2px solid rgba(255,255,255,0.06);
+      pointer-events: none;
+    }
+    #record::after {
+      content: 'HIPHOP';
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      font-family: 'Impact', 'Arial Black', sans-serif;
+      font-size: 18px;
+      font-weight: 900;
+      color: #fff;
+      letter-spacing: 1.5px;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+      pointer-events: none;
+    }
+    #turntable.grabbing { cursor: grabbing; }
+
+    #year {
+      position: absolute;
+      bottom: 210px;
+      right: 20px;
+      color: #ffcc00;
+      font-size: 24px;
+      text-shadow: 0 0 10px #ff0;
+    }
+    /* マーカー（マイク） */
+    .marker {
+      font-size: 24px;
+      line-height: 24px;
+      transform: translate(-50%, -50%);
+      text-shadow: 0 0 6px #000;
+    }
+    /* HIPHOP風ポップアップ */
+    .maplibregl-popup.hiphop-popup .maplibregl-popup-content {
+      background: linear-gradient(180deg, #111 0%, #1a1a1a 100%);
+      color: #ffcc00;
+      border: 3px solid #ffcc00;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-family: 'Impact', 'Arial Black', sans-serif;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.8), 0 0 12px rgba(255,204,0,0.08) inset;
+      max-width: 220px;
+    }
+    .hiphop-popup .hiphop-title {
+      font-size: 16px;
+      color: #ffffff;
+      background: linear-gradient(90deg,#ffcc00,#ff9900);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.6);
+      margin-bottom: 6px;
+      font-weight: 800;
+    }
+    .hiphop-popup .hiphop-body div {
+      font-size: 12px;
+      color: #ffd; /* pale yellow */
+      margin: 2px 0;
+    }
+    .hiphop-popup .hiphop-key { color: #ffcc66; font-weight:700; margin-right:6px; }
+  .hiphop-avatar { width:40px; height:40px; border-radius:50%; margin-right:6px; vertical-align:middle; border:2px solid #222; box-shadow:0 2px 6px rgba(0,0,0,0.6); }
+  .hiphop-person { display:inline-flex; align-items:center; gap:8px; margin:4px 0; }
+  .hiphop-person-name { font-size:12px; color:#ffd; }
+  </style>
+</head>
+
+<body>
+  <div id="map"></div>
+
+  <div id="year">1970</div>
+  <div id="turntable">
+    <div id="record"></div>
+  </div>
+
+  <audio id="scratch" src="scratch.mp3"></audio>
+  <audio id="hiphop" src="hiphop.mp3"></audio>
+
+  <script src="https://unpkg.com/maplibre-gl@3.6.0/dist/maplibre-gl.js"></script>
+  <script src="data.js"></script>
+
+  <script>
+    // data.js が配列リテラルだけになっている（historyData を定義しない）場合に対応するため、
+    // maplibre の読み込みを待ち、必要なら data.js を fetch してパースしてから初期化します。
+    function ensureHistoryData() {
+      if (window.historyData) return Promise.resolve();
+      return fetch('data.js').then(resp => {
+        if (!resp.ok) throw new Error('Failed to fetch data.js: ' + resp.status);
+        return resp.text();
+      }).then(text => {
+        // 期待される形式は JSON 配列リテラルなのでまず JSON.parse を試す
+        try {
+          window.historyData = JSON.parse(text);
+          return;
+        } catch (err) {
+          // それでもだめなら JS として評価する（'[' ... ']' の配列リテラルであれば安全に評価できる）
+          try {
+            window.historyData = (0, eval)('(' + text + ')');
+            return;
+          } catch (err2) {
+            throw new Error('Unable to parse data.js');
+          }
+        }
+      });
+    }
+
+    function waitForLibsAndData() {
+      if (!window.maplibregl) { setTimeout(waitForLibsAndData, 100); return; }
+      ensureHistoryData().then(() => {
+        initApp();
+      }).catch(err => {
+        console.error('Failed to load historyData:', err);
+        // 少し待って再試行
+        setTimeout(waitForLibsAndData, 500);
+      });
+    }
+
+    function initApp() {
+      const map = new maplibregl.Map({
+        container: 'map',
+        // デフォルトの公開スタイルを使用（MapLibre のデモスタイル）
+        style: 'https://demotiles.maplibre.org/style.json',
+        center: [0, 20],
+        zoom: 1.5
+      });
+
+      let currentYear = 1970;
+      let index = 0; // 次に追加するデータのインデックス
+      let coordinates = [];
+      let markers = []; // 追加したマーカーの参照を保持
+      let personInfoMap = {}; // name -> { image: url, page: url }
+      // 名前マッピング: 表示名（日本語など） -> Wikipedia のページタイトル（英語等）
+      const nameMapping = {
+        'グランド・マスター・フラッシュ': 'Grandmaster_Flash',
+        // 追加のマッピングをここに書いてください
+      };
+
+      const record = document.getElementById('record');
+      const yearLabel = document.getElementById('year');
+      const scratch = document.getElementById('scratch');
+      const hiphop = document.getElementById('hiphop');
+
+      // プレースホルダー（SVG data URI）
+      const placeholderAvatar = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="100%" height="100%" fill="#222"/><text x="50%" y="50%" font-family="Impact,Arial,Helvetica" font-size="18" fill="#ffcc00" dominant-baseline="middle" text-anchor="middle">?</text></svg>');
+
+      // 各 person 名について Wikipedia REST API からサムネイルを取得する（クライアント側で fetch）
+      // 成功したら personImageMap[name] = url。
+      function fetchPersonImages() {
+        const names = new Set();
+        historyData.forEach(item => {
+          if (Array.isArray(item.people)) item.people.forEach(p => names.add(p));
+        });
+
+        const promises = Array.from(names).map(name => {
+          // マッピングがあればそれを使って検索する（日本語名 -> 英語ページ）
+          const lookup = nameMapping[name] || name;
+          const encoded = encodeURIComponent(lookup);
+          const url = `https://en.wikipedia.org/api/rest_v1/page/summary/${encoded}`;
+          return fetch(url)
+            .then(resp => {
+              if (!resp.ok) throw new Error('no page');
+              return resp.json();
+            })
+            .then(json => {
+              const image = (json.thumbnail && json.thumbnail.source) ? json.thumbnail.source : placeholderAvatar;
+              const page = (json.content_urls && json.content_urls.desktop && json.content_urls.desktop.page)
+                ? json.content_urls.desktop.page
+                : `https://en.wikipedia.org/wiki/${encodeURIComponent(lookup)}`;
+              personInfoMap[name] = { image, page };
+            })
+            .catch(() => {
+              const lookup = nameMapping[name] || name;
+              personInfoMap[name] = { image: placeholderAvatar, page: `https://en.wikipedia.org/wiki/${encodeURIComponent(lookup)}` };
+            });
+        });
+
+        return Promise.all(promises);
+      }
+
+      // マップがロードされたらルート用のソースとレイヤーを作成
+      map.on('load', () => {
+        map.addSource('route', {
+          type: 'geojson',
+          data: {
+            type: 'Feature',
+            geometry: {
+              type: 'LineString',
+              coordinates: []
+            }
+          }
+        });
+
+        map.addLayer({
+          id: 'route-line',
+          type: 'line',
+          source: 'route',
+          paint: {
+            'line-color': '#ffcc00',
+            'line-width': 2
+          }
+        });
+        // 人物画像の取得を試み、完了したらconsoleにログ
+        fetchPersonImages().then(() => {
+          console.log('person images loaded');
+        }).catch(() => {
+          console.warn('person image fetch failed');
+        });
+      });
+
+      // ポインタ（ドラッグ）でレコードを回して年を進める
+      // 45deg ごとに次のデータを追加する
+      const turntable = document.getElementById('turntable');
+      let isPointerDown = false;
+      let lastAngle = 0;
+      let accumulated = 0; // 累積回転量(deg)
+      let totalRotation = 0; // 見た目の回転角
+      const STEP_DEG = 45; // 1ステップあたりの角度
+
+      function getAngleFromEvent(e) {
+        const rect = turntable.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const x = e.clientX;
+        const y = e.clientY;
+        const rad = Math.atan2(y - cy, x - cx);
+        return rad * (180 / Math.PI);
+      }
+
+      function normalizeDelta(delta) {
+        // Normalize to [-180, 180]
+        while (delta > 180) delta -= 360;
+        while (delta < -180) delta += 360;
+        return delta;
+      }
+
+      function addNextEntry() {
+        if (index >= historyData.length) return;
+
+        // スクラッチ音（頭出し）
+        try { scratch.currentTime = 0; } catch (err) {}
+        scratch.play();
+
+        const item = historyData[index];
+        currentYear = item.year;
+        yearLabel.innerText = currentYear;
+
+        // マーカー（マイク）を作成して追加（既存のものは消さない）
+        const el = document.createElement('div');
+        el.className = 'marker';
+        el.innerText = '🎤';
+        el.style.color = '#ffcc00';
+
+        const marker = new maplibregl.Marker(el)
+          .setLngLat([item.lng, item.lat])
+          .addTo(map);
+        // マーカーをクリックすると詳細ポップアップを表示
+        el.style.cursor = 'pointer';
+        // popup 用の HTML を生成（lng/lat は除外）
+        // popup 用の HTML を生成（lng/lat は除外）
+        const entries = Object.entries(item).filter(([k]) => k !== 'lng' && k !== 'lat');
+        const titleKey = entries.find(([k]) => /title|name|artist/i.test(k));
+        const title = titleKey ? titleKey[1] : `Year ${item.year}`;
+        const bodyParts = [];
+        // song と song_url が両方あると重複して表示されるため、
+        // ここでは song_url を直接出さず、song がある場合は song にリンクを付けて表示します。
+        let songFound = false;
+        entries.filter(([k]) => !/title|name|artist/i.test(k)).forEach(([k, v]) => {
+            if (k === 'people' && Array.isArray(v)) {
+              const imgs = v.map(name => {
+              const info = personInfoMap[name] || { image: placeholderAvatar, page: `https://en.wikipedia.org/wiki/${encodeURIComponent(name)}` };
+              const src = info.image;
+              const page = info.page;
+              return `<a class="hiphop-person" href="${page}" target="_blank" rel="noopener noreferrer"><img class="hiphop-avatar" src="${src}" alt="${name}" title="${name}"><span class="hiphop-person-name">${name}</span></a>`;
+            }).join('');
+            bodyParts.push(`${imgs}`);
+          } else if (k === 'song') {
+            songFound = true;
+            const url = item.song_url ? item.song_url : '';
+            if (url) {
+              bodyParts.push(`<div><span class="hiphop-key">song</span><span class="hiphop-val">${v} <a href="${url}" target="_blank" rel="noopener noreferrer">🔗</a></span></div>`);
+            } else {
+              bodyParts.push(`<div><span class="hiphop-key">song</span><span class="hiphop-val">${v}</span></div>`);
+            }
+          } else if (k === 'song_url') {
+            // song が既に表示されていれば重複を避ける（何もしない）
+            // song が無ければ下でまとめて表示するためここではスキップ
+          } else {
+            bodyParts.push(`<div><span class="hiphop-key">${k}</span><span class="hiphop-val">${v}</span></div>`);
+          }
+        });
+        // song フィールドが無く、song_url がある場合は Listen リンクだけ表示する
+        if (!songFound && item.song_url) {
+          bodyParts.push(`<div><span class="hiphop-key">song</span><a class="hiphop-val" href="${item.song_url}" target="_blank" rel="noopener noreferrer">🔗 Listen</a></div>`);
+        }
+        const bodyHtml = bodyParts.join('');
+        const popupHtml = `<div class="hiphop-popup"><div class="hiphop-title">${title}</div><div class="hiphop-body">${bodyHtml}</div></div>`;
+        const popup = new maplibregl.Popup({ offset: 25, className: 'hiphop-popup' }).setHTML(popupHtml);
+        marker.setPopup(popup);
+        markers.push(marker);
+
+        // 座標を蓄積し、ルートソースを更新
+        coordinates.push([item.lng, item.lat]);
+        if (map.isStyleLoaded() && map.getSource('route')) {
+          map.getSource('route').setData({
+            type: 'Feature',
+            geometry: {
+              type: 'LineString',
+              coordinates
+            }
+          });
+        }
+
+        // hiphop 曲を流す（毎回頭出しで再生）
+        try { hiphop.currentTime = 0; } catch (err) {}
+        hiphop.play();
+
+        index++;
+      }
+
+      function addPreviousEntry() {
+        // 1つ戻る（直前に追加したものを削除）
+        if (index <= 0) return;
+
+        // スクラッチ音（頭出し）
+        try { scratch.currentTime = 0; } catch (err) {}
+        scratch.play();
+
+        // マーカーと座標を取り除く
+        index--; // index は次に追加する位置なので先に減らす
+        const marker = markers.pop();
+        if (marker) marker.remove();
+
+        coordinates.pop();
+
+        // ルートを更新
+        if (map.isStyleLoaded() && map.getSource('route')) {
+          map.getSource('route').setData({
+            type: 'Feature',
+            geometry: {
+              type: 'LineString',
+              coordinates
+            }
+          });
+        }
+
+        // 年表示を更新（残りがなければ初期1970に戻す）
+        if (index > 0) {
+          currentYear = historyData[index - 1].year;
+        } else {
+          currentYear = 1970;
+        }
+        yearLabel.innerText = currentYear;
+
+        // hiphop は後退時は停止する
+        try { hiphop.pause(); } catch (err) {}
+      }
+
+      turntable.addEventListener('pointerdown', (e) => {
+        isPointerDown = true;
+        turntable.setPointerCapture(e.pointerId);
+        turntable.classList.add('grabbing');
+        lastAngle = getAngleFromEvent(e);
+      });
+
+      window.addEventListener('pointermove', (e) => {
+        if (!isPointerDown) return;
+        const angle = getAngleFromEvent(e);
+        let delta = angle - lastAngle;
+        delta = normalizeDelta(delta);
+        lastAngle = angle;
+
+        // 累積回転で前後のステップを判定
+        accumulated += delta;
+        totalRotation += delta;
+        record.style.transform = `rotate(${totalRotation}deg)`;
+
+        // 前に進む（時計回り）
+        while (accumulated >= STEP_DEG) {
+          accumulated -= STEP_DEG;
+          addNextEntry();
+        }
+
+        // 戻る（反時計回り）
+        while (accumulated <= -STEP_DEG) {
+          accumulated += STEP_DEG;
+          addPreviousEntry();
+        }
+      });
+
+      window.addEventListener('pointerup', (e) => {
+        if (!isPointerDown) return;
+        isPointerDown = false;
+        try { turntable.releasePointerCapture(e.pointerId); } catch (err) {}
+        turntable.classList.remove('grabbing');
+      });
+    }
+
+    waitForLibsAndData();
+  </script>
+</body>
+</html>
