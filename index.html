@@ -237,33 +237,101 @@
         return Promise.all(promises);
       }
 
-      // マップがロードされたらルート用のソースとレイヤーを作成
-      map.on('load', () => {
-        map.addSource('route', {
-          type: 'geojson',
-          data: {
-            type: 'Feature',
-            geometry: {
-              type: 'LineString',
-              coordinates: []
+      // --- 年ベースでマーカーを管理するユーティリティ ---
+      const MIN_YEAR = 1970;
+
+      // 指定の item からマーカーを作成して返す
+      function createMarkerForItem(item) {
+        const el = document.createElement('div');
+        el.className = 'marker';
+        el.innerText = '🎤';
+        el.style.color = '#ffcc00';
+        el.style.cursor = 'pointer';
+
+        const entries = Object.entries(item).filter(([k]) => k !== 'lng' && k !== 'lat');
+        const titleKey = entries.find(([k]) => /title|name|artist/i.test(k));
+        const title = titleKey ? titleKey[1] : `Year ${item.year}`;
+        const bodyParts = [];
+        let songFound = false;
+        entries.filter(([k]) => !/title|name|artist/i.test(k)).forEach(([k, v]) => {
+          if (k === 'people' && Array.isArray(v)) {
+            const imgs = v.map(name => {
+              const info = personInfoMap[name] || { image: placeholderAvatar, page: `https://en.wikipedia.org/wiki/${encodeURIComponent(name)}` };
+              const src = info.image;
+              const page = info.page;
+              return `<a class="hiphop-person" href="${page}" target="_blank" rel="noopener noreferrer"><img class="hiphop-avatar" src="${src}" alt="${name}" title="${name}"><span class="hiphop-person-name">${name}</span></a>`;
+            }).join('');
+            bodyParts.push(`${imgs}`);
+          } else if (k === 'song') {
+            songFound = true;
+            const url = item.song_url ? item.song_url : '';
+            if (url) {
+              bodyParts.push(`<div><span class="hiphop-key">song</span><span class="hiphop-val">${v} <a href="${url}" target="_blank" rel="noopener noreferrer">🔗</a></span></div>`);
+            } else {
+              bodyParts.push(`<div><span class="hiphop-key">song</span><span class="hiphop-val">${v}</span></div>`);
             }
+          } else if (k === 'song_url') {
+            // skip
+          } else {
+            bodyParts.push(`<div><span class="hiphop-key">${k}</span><span class="hiphop-val">${v}</span></div>`);
+          }
+        });
+        if (!songFound && item.song_url) {
+          bodyParts.push(`<div><span class="hiphop-key">song</span><a class="hiphop-val" href="${item.song_url}" target="_blank" rel="noopener noreferrer">🔗 Listen</a></div>`);
+        }
+        const bodyHtml = bodyParts.join('');
+        const popupHtml = `<div class="hiphop-popup"><div class="hiphop-title">${title}</div><div class="hiphop-body">${bodyHtml}</div></div>`;
+
+        const marker = new maplibregl.Marker(el).setLngLat([item.lng, item.lat]).addTo(map);
+        const popup = new maplibregl.Popup({ offset: 25, className: 'hiphop-popup' }).setHTML(popupHtml);
+        marker.setPopup(popup);
+
+        // クリックで中央レコード画像に切り替える（存在すれば）
+        el.addEventListener('click', () => {
+          // if record-center-img exists from other edits, try to update it; otherwise ignore
+          const img = document.getElementById('record-center-img');
+          const rec = document.getElementById('record');
+          const cover = item.image || item.cover || (item.people && item.people.length && personInfoMap[item.people[0]] && personInfoMap[item.people[0]].image);
+          if (img && cover) {
+            img.src = cover;
+            img.style.opacity = '1';
+            rec && rec.classList && rec.classList.add('has-cover');
           }
         });
 
-        map.addLayer({
-          id: 'route-line',
-          type: 'line',
-          source: 'route',
-          paint: {
-            'line-color': '#ffcc00',
-            'line-width': 2
+        return marker;
+      }
+
+      // 指定年までのアイテムをマップに表示する（それ以降のものは削除）
+      function renderMarkersForYear(year) {
+        // clamp year
+        if (typeof year !== 'number') return;
+        if (year < MIN_YEAR) year = MIN_YEAR;
+        yearLabel.innerText = year;
+
+        // remove existing markers
+        markers.forEach(m => { try { m.remove(); } catch (e) {} });
+        markers = [];
+
+        // add markers for all items with item.year <= year
+        (window.historyData || []).forEach(item => {
+          if (typeof item.year === 'number' && item.year <= year) {
+            if (typeof item.lng === 'number' && typeof item.lat === 'number') {
+              const m = createMarkerForItem(item);
+              markers.push(m);
+            }
           }
         });
-        // 人物画像の取得を試み、完了したらconsoleにログ
+      }
+
+      // マップ読み込み時に人物画像をフェッチして初期レンダリング
+      map.on('load', () => {
         fetchPersonImages().then(() => {
           console.log('person images loaded');
+          renderMarkersForYear(currentYear);
         }).catch(() => {
           console.warn('person image fetch failed');
+          renderMarkersForYear(currentYear);
         });
       });
 
@@ -358,17 +426,9 @@
         marker.setPopup(popup);
         markers.push(marker);
 
-        // 座標を蓄積し、ルートソースを更新
+        // 座標を蓄積（ルート描画は無効化）
         coordinates.push([item.lng, item.lat]);
-        if (map.isStyleLoaded() && map.getSource('route')) {
-          map.getSource('route').setData({
-            type: 'Feature',
-            geometry: {
-              type: 'LineString',
-              coordinates
-            }
-          });
-        }
+        // Route drawing removed: no source update performed.
 
         // hiphop 曲を流す（毎回頭出しで再生）
         try { hiphop.currentTime = 0; } catch (err) {}
@@ -391,17 +451,7 @@
         if (marker) marker.remove();
 
         coordinates.pop();
-
-        // ルートを更新
-        if (map.isStyleLoaded() && map.getSource('route')) {
-          map.getSource('route').setData({
-            type: 'Feature',
-            geometry: {
-              type: 'LineString',
-              coordinates
-            }
-          });
-        }
+        // Route drawing removed: no source update performed.
 
         // 年表示を更新（残りがなければ初期1970に戻す）
         if (index > 0) {
