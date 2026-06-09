@@ -122,6 +122,59 @@
   .hiphop-avatar { width:40px; height:40px; border-radius:50%; margin-right:6px; vertical-align:middle; border:2px solid #222; box-shadow:0 2px 6px rgba(0,0,0,0.6); }
   .hiphop-person { display:inline-flex; align-items:center; gap:8px; margin:4px 0; }
   .hiphop-person-name { font-size:12px; color:#ffd; }
+  
+  /* 常時表示の再生/停止ボタン */
+  #audio-control {
+    position: absolute;
+    left: 12px;
+    top: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(0,0,0,0.5);
+    color: #ffcc00;
+    padding: 8px 10px;
+    border-radius: 8px;
+    border: 2px solid rgba(255,204,0,0.08);
+    z-index: 1000;
+  }
+  #audio-toggle-btn {
+    /* 背景の黄色を消して絵文字だけを大きく見せる */
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    color: inherit; /* 絵文字自体の色はそのまま */
+    font-weight: 800;
+    padding: 4px;
+    font-size: 28px; /* 絵文字を大きく表示 */
+    line-height: 1;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  /* プレイリストパネル */
+  #playlist {
+    position: absolute;
+    right: 12px;
+    top: 12px;
+    width: 260px;
+    max-height: 60vh;
+    overflow: auto;
+    background: rgba(10,10,10,0.7);
+    color: #ffd;
+    border: 2px solid rgba(255,204,0,0.12);
+    border-radius: 8px;
+    padding: 8px;
+    z-index: 1000;
+    font-size: 13px;
+  }
+  #playlist .playlist-header { font-weight:800; color:#ffcc00; margin-bottom:6px }
+  #playlist-items { list-style:none; padding:0; margin:0 0 8px 0; }
+  #playlist-items li { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px; border-radius:6px }
+  #playlist-items li.playing { background: rgba(255,204,0,0.08); }
+  #playlist-items button { background:transparent; border:none; color:#ffcc66; cursor:pointer }
+  #add-track-form { display:flex; gap:6px; flex-wrap:wrap }
+  #add-track-form input { background:#111; border:1px solid #222; color:#ffd; padding:6px; border-radius:4px; }
+  #add-track-form button { background:#ffcc00; border:none; padding:6px 8px; border-radius:4px; cursor:pointer }
   </style>
 </head>
 
@@ -135,6 +188,30 @@
 
   <audio id="scratch" src="scratch.mp3"></audio>
   <audio id="hiphop" src="hiphop.mp3"></audio>
+  <!-- 自動再生したいトラック（ローカルファイル名） -->
+  <audio id="campanella" src="カンパネラ.mp3" preload="auto"></audio>
+  <!-- 汎用プレイヤー：プレイリスト曲をここで再生する -->
+  <audio id="player" preload="auto"></audio>
+
+  
+
+  <!-- 常時表示の再生/停止コントロール -->
+  <div id="audio-control">
+    <button id="audio-toggle-btn" aria-label="一時停止">⏸️</button>
+  </div>
+
+  <!-- プレイリスト UI -->
+  <div id="playlist">
+    <div class="playlist-header">Playlist</div>
+    <ul id="playlist-items"></ul>
+    <form id="add-track-form">
+      <input type="text" id="track-title" placeholder="タイトル（例: baberu）" />
+      <input type="text" id="track-src" placeholder="ファイル名またはURL（例: baberu.mp3）" />
+      <input type="text" id="track-lng" placeholder="lng（任意）」 style="width:80px" />
+      <input type="text" id="track-lat" placeholder="lat（任意）」 style="width:80px" />
+      <button id="add-track-btn">追加</button>
+    </form>
+  </div>
 
   <script src="https://unpkg.com/maplibre-gl@3.6.0/dist/maplibre-gl.js"></script>
   <script src="data.js"></script>
@@ -199,6 +276,189 @@
       const yearLabel = document.getElementById('year');
       const scratch = document.getElementById('scratch');
       const hiphop = document.getElementById('hiphop');
+      const campanella = document.getElementById('campanella');
+      const player = document.getElementById('player');
+
+      // --- プレイリスト管理 ---
+      // 初期プレイリスト（ローカルファイル名を想定）。必要ならパスを修正。
+      const playlist = [
+        { title: 'baberu', src: 'baberu.mp3', lng: null, lat: null },
+        { title: 'カンパネラ', src: 'カンパネラ.mp3', lng: null, lat: null }
+      ];
+
+      // 現在再生中のインデックス
+      let currentTrackIndex = -1;
+
+      function renderPlaylist() {
+        const ul = document.getElementById('playlist-items');
+        if (!ul) return;
+        ul.innerHTML = '';
+        playlist.forEach((t, i) => {
+          const li = document.createElement('li');
+          if (i === currentTrackIndex) li.classList.add('playing');
+          const left = document.createElement('div');
+          left.style.flex = '1';
+          left.textContent = t.title || t.src;
+          const btns = document.createElement('div');
+          const playBtn = document.createElement('button');
+          playBtn.textContent = '▶';
+          playBtn.title = '再生';
+          playBtn.addEventListener('click', () => playTrack(i));
+          const removeBtn = document.createElement('button');
+          removeBtn.textContent = '✖';
+          removeBtn.title = '削除';
+          removeBtn.addEventListener('click', () => { playlist.splice(i,1); if (currentTrackIndex===i) stopPlayer(); if (currentTrackIndex>i) currentTrackIndex--; renderPlaylist(); removeTrackMarker(i); });
+          btns.appendChild(playBtn);
+          btns.appendChild(removeBtn);
+          li.appendChild(left);
+          li.appendChild(btns);
+          ul.appendChild(li);
+        });
+      }
+
+      function playTrack(index) {
+        const t = playlist[index];
+        if (!t || !player) return;
+        currentTrackIndex = index;
+        player.src = t.src;
+        player.loop = false;
+        player.currentTime = 0;
+        player.play().then(() => {
+          renderPlaylist();
+        }).catch(err => {
+          console.warn('Playback failed:', err);
+        });
+        // もし座標があればマップをそちらに寄せる
+        if (typeof t.lng === 'number' && typeof t.lat === 'number') {
+          map.flyTo({ center: [t.lng, t.lat], zoom: 6 });
+        }
+      }
+
+      function stopPlayer() {
+        if (!player) return;
+        try { player.pause(); player.currentTime = 0; } catch(e){}
+        currentTrackIndex = -1;
+        renderPlaylist();
+      }
+
+      function addTrack(track) {
+        // track: { title, src, lng?, lat? }
+        playlist.push(track);
+        const idx = playlist.length - 1;
+        renderPlaylist();
+        if (typeof track.lng === 'number' && typeof track.lat === 'number') {
+          addTrackMarker(track, idx);
+        }
+        return idx;
+      }
+
+      // マップ上のプレイリストトラック用マーカーを管理
+      const trackMarkers = [];
+      function addTrackMarker(track, index) {
+        if (typeof track.lng !== 'number' || typeof track.lat !== 'number') return;
+        const el = document.createElement('div');
+        el.className = 'marker';
+        el.innerText = '♫';
+        el.style.color = '#ffcc00';
+        el.style.cursor = 'pointer';
+        const marker = new maplibregl.Marker(el).setLngLat([track.lng, track.lat]).addTo(map);
+        el.addEventListener('click', () => playTrack(index));
+        trackMarkers[index] = marker;
+      }
+
+      function removeTrackMarker(index) {
+        const m = trackMarkers[index];
+        if (m) { try { m.remove(); } catch(e){} trackMarkers[index] = null; }
+      }
+
+      // 初期プレイリストをレンダリングし、座標つきの曲はマーカーを追加
+      renderPlaylist();
+      playlist.forEach((t,i) => { if (typeof t.lng === 'number' && typeof t.lat === 'number') addTrackMarker(t,i); });
+
+      // プレイリスト追加フォーム
+      const addForm = document.getElementById('add-track-form');
+      if (addForm) {
+        addForm.addEventListener('submit', (e) => {
+          e.preventDefault();
+          const title = document.getElementById('track-title').value.trim();
+          const src = document.getElementById('track-src').value.trim();
+          const lngRaw = document.getElementById('track-lng').value.trim();
+          const latRaw = document.getElementById('track-lat').value.trim();
+          const track = { title: title || src, src };
+          const lng = parseFloat(lngRaw); const lat = parseFloat(latRaw);
+          if (!isNaN(lng) && !isNaN(lat)) { track.lng = lng; track.lat = lat; }
+          addTrack(track);
+          addForm.reset();
+        });
+      }
+
+      // --- プレイヤー統合: 既存の toggle ボタンは player を操作するように変更 ---
+      (function setupPlayerControl(){
+        const toggleBtn = document.getElementById('audio-toggle-btn');
+        if (!toggleBtn || !player) return;
+        function updateButton() {
+          if (player.paused || !player.src) {
+            toggleBtn.textContent = '▶️';
+            toggleBtn.setAttribute('aria-label', '再生');
+          } else {
+            toggleBtn.textContent = '⏸️';
+            toggleBtn.setAttribute('aria-label', '一時停止');
+          }
+        }
+        player.addEventListener('play', updateButton);
+        player.addEventListener('pause', updateButton);
+        player.addEventListener('ended', () => { currentTrackIndex = -1; renderPlaylist(); updateButton(); });
+        toggleBtn.addEventListener('click', () => {
+          if (!player.src) {
+            // 再生する曲が選ばれていなければ最初の曲を再生
+            if (playlist.length) playTrack(0);
+            return;
+          }
+          if (player.paused) player.play().catch(err => console.warn('Play failed', err)); else player.pause();
+        });
+        updateButton();
+      })();
+
+      // 常時表示コントロールの初期化
+      (function setupAudioControl(){
+  const toggleBtn = document.getElementById('audio-toggle-btn');
+  if (!toggleBtn || !campanella) return;
+
+        function updateButton() {
+          if (campanella.paused) {
+            toggleBtn.textContent = '▶️';
+            toggleBtn.setAttribute('aria-label', '再生');
+            toggleBtn.title = '再生';
+          } else {
+            toggleBtn.textContent = '⏸️';
+            toggleBtn.setAttribute('aria-label', '一時停止');
+            toggleBtn.title = '一時停止';
+          }
+        }
+
+        // 再生状態が変わったらラベルを更新
+        campanella.addEventListener('play', updateButton);
+        campanella.addEventListener('pause', updateButton);
+        campanella.addEventListener('ended', updateButton);
+
+        // ボタンクリックでトグル（オーバーレイが見えている場合は非表示にする）
+        toggleBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          if (campanella.paused) {
+            campanella.play().then(() => {
+              // 成功
+            }).catch(err => {
+              console.warn('Play failed:', err);
+              showAudioFallback();
+            });
+          } else {
+            campanella.pause();
+          }
+        });
+
+        // 初期ラベル更新
+        updateButton();
+      })();
 
       // プレースホルダー（SVG data URI）
       const placeholderAvatar = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="100%" height="100%" fill="#222"/><text x="50%" y="50%" font-family="Impact,Arial,Helvetica" font-size="18" fill="#ffcc00" dominant-baseline="middle" text-anchor="middle">?</text></svg>');
